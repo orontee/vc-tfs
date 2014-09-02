@@ -5,6 +5,19 @@
 
 ;; Note that this implementation is based on vc-svn.el.
 
+;; (add-to-list 'vc-handled-backends 'TFS)
+
+;; Todos
+;; - simple vc-dir
+;; - vc-dir with shelves
+;; - Hyper links in history buffers
+;; - Rollback
+
+;; Bugs:
+;; - vc-diff C-cC-c is not working (not searching for the right file,
+;; see diff-find-file-name)
+;; - vc-log comment column is truncated
+
 ;;; Code:
 
 (eval-when-compile
@@ -104,7 +117,14 @@ of arguments, use t."
     (with-temp-buffer
       (cd (file-name-directory file))
       (vc-tfs-command t 0 file "localversions")
-      (or (car (last (split-string (buffer-string) ":"))) 0)))
+      (goto-char (point-min))
+      (cond
+       ((re-search-forward (concat
+			    (regexp-quote (file-name-nondirectory file))
+			    ";C\\([0-9]+\\)")
+			   nil t)
+	(match-string 1))
+       (t "0"))))
 
 (defun vc-tfs-parse-properties ()
   "Parse output of \"tf properties\" command in the current buffer."
@@ -133,9 +153,9 @@ of arguments, use t."
 	 ((not (equal lock "none")) lock-owner)
 	 ((equal change "edit")
 	  (if obsolete 'needs-merge 'edited))
-	 ((equal change "unchange")
+	 ((equal change "none")
 	  (if obsolete 'needs-update 'up-to-date))
-	 ((equal change "added") 'added)
+	 ((equal change "add") 'added)
 	 ((equal change "deleted") 'removed)
 	 ((equal change "conflict") 'conflict)
 	 ((equal change "missing") 'missing)
@@ -143,6 +163,8 @@ of arguments, use t."
      (t 'unregistered))))
 
 ;; TODO Does TFS handles ignored files?
+
+;; TODO Prepare for internationalization
 
 (defun vc-tfs-checkout-model (_files) 'announce)
 
@@ -180,11 +202,13 @@ If REV is the empty string, fetch the revision of the workspace."
   (let (process-file-side-effects)
     (apply 'vc-tfs-command
 	   buffer 0 file "view"
-	   (append
+	   (nconc
 	    (list "/noprompt")
 	    (and rev (not (string= rev ""))
-		(concat "/version:C" rev)))
-	   (vc-switches 'TFS 'checkout))))
+		(list (concat "/version:C" rev)))
+	    (vc-switches 'TFS 'checkout)))))
+
+;; TODO Check that the switch is well computed
 
 (defun vc-tfs-checkout (file &optional editable rev)
   ;; TODO Don't recreate file when existing with required version
@@ -192,10 +216,10 @@ If REV is the empty string, fetch the revision of the workspace."
 	   (append
 	    (list "/noprompt")
 	    (cond
-	     ((null rev) "/version:T")
+	     ((null rev) (list "/version:T"))
 	     ((or (eq rev t) (equal rev "")) nil)
-	     (t (concat "/version:C" rev)))))
-  (apply 'vc-tfs-command nil 0 file "checkout"))
+	     (t (list (concat "/version:C" rev))))))
+  (vc-tfs-command nil 0 file "checkout"))
 
 (defun vc-tfs-revert (file &optional contents-done)
   "Removes pending changes from the workspace for FILE."
@@ -229,17 +253,17 @@ If LIMIT is non-nil, show no more than this many entries."
 		   (append
 		    (list
 		     (if start-revision
-			 (format "/version:C" start-revision)
+			 (format "/version:C%s" start-revision)
 		       "/version:T"))
 		    (list "/noprompt")
-		    (when limit (list "/stopafter:" (format "%s" limit))))))
+		    (when limit (list (format "/stopafter:%s" limit))))))
 	;; Dump log for the entire directory.
 	(apply 'vc-tfs-command buffer 0 (list ".") "history"
 	       (append
 		(list
-		 (if start-revision (format "/version:C" start-revision) "/version:T"))
+		 (if start-revision (format "/version:C%s" start-revision) "/version:T"))
 		(list "/noprompt")
-		(when limit (list "/stopafter:" (format "%s" limit)))))))))
+		(when limit (list (format "/stopafter:%s" limit)))))))))
 
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
   "Get a difference report using TFS between two revisions of fileset FILES."
