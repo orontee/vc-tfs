@@ -12,6 +12,9 @@
 ;; - vc-dir with shelves
 ;; - Hyper links in history buffers
 ;; - Rollback
+;; - Workspace in `help-echo' property of mode line string
+;; - Revision completion
+;; - Delete, rename files
 
 ;; Bugs:
 ;; - vc-diff C-cC-c is not working (not searching for the right file,
@@ -63,18 +66,16 @@ If t, use no switches."
   :version "24.4"
   :group 'vc-tfs)
 
-(defcustom vc-tfs-diff-switches "/format:context"
+(defcustom vc-tfs-diff-switches "/format:Unified"
   "String or list of strings specifying extra switches for TFS diff under VC.
 If nil, use the value of `vc-diff-switches' (or `diff-switches'),
-together with \"/format:context\" to force the use of the UNIX
-based 'diff -c' output format. If you want to force an empty list
+together with \"/format:Unified\" to force the use of the UNIX
+based 'diff -u' output format. If you want to force an empty list
 of arguments, use t."
   :type '(choice (const :tag "Unspecified" nil)
 		 (const :tag "None" t)
 		 (string :tag "Argument String")
-		 (repeat :tag "Argument List"
-			 :value ("")
-			 string))
+		 (repeat :tag "Argument List" :value ("") string))
   :version "24.4"
   :group 'vc-tfs)
 
@@ -219,7 +220,7 @@ If REV is the empty string, fetch the revision of the workspace."
 	     ((null rev) (list "/version:T"))
 	     ((or (eq rev t) (equal rev "")) nil)
 	     (t (list (concat "/version:C" rev))))))
-  (vc-tfs-command nil 0 file "checkout"))
+  (vc-tfs-command nil 0 file "checkout" (vc-switches 'TFS 'checkout)))
 
 (defun vc-tfs-revert (file &optional contents-done)
   "Removes pending changes from the workspace for FILE."
@@ -283,7 +284,7 @@ If LIMIT is non-nil, show no more than this many entries."
   (let* ((switches
 	    (if vc-tfs-diff-switches
 		(vc-switches 'TFS 'diff)
-	      (list "/format:Context"
+	      (list "/format:Unified"
 		    (mapconcat 'identity (vc-switches nil 'diff) " "))))
 	   (async (and (not vc-disable-async-diff)
                        (vc-stay-local-p files 'TFS))))
