@@ -5,12 +5,12 @@
 
 ;; Note that this implementation is based on vc-svn.el.
 
-;; (add-to-list 'vc-handled-backends 'TFS)
+(add-to-list 'vc-handled-backends 'TFS)
 
 ;; Todos
 ;; - simple vc-dir
 ;; - vc-dir with shelves
-;; - Hyper links in history buffers
+;; - Short and long format for logs
 ;; - Rollback
 ;; - Workspace in `help-echo' property of mode line string
 ;; - Revision completion
@@ -19,7 +19,6 @@
 ;; Bugs:
 ;; - vc-diff C-cC-c is not working (not searching for the right file,
 ;; see diff-find-file-name)
-;; - vc-log comment column is truncated
 
 ;;; Code:
 
@@ -257,14 +256,35 @@ If LIMIT is non-nil, show no more than this many entries."
 			 (format "/version:C%s" start-revision)
 		       "/version:T"))
 		    (list "/noprompt")
+		    (list "/format:detailed")
 		    (when limit (list (format "/stopafter:%s" limit))))))
-	;; Dump log for the entire directory.
 	(apply 'vc-tfs-command buffer 0 (list ".") "history"
 	       (append
 		(list
 		 (if start-revision (format "/version:C%s" start-revision) "/version:T"))
 		(list "/noprompt")
+		(list "/format:detailed")
 		(when limit (list (format "/stopafter:%s" limit)))))))))
+
+;; TODO Handle short logs
+
+(defvar log-view-message-re)
+(defvar log-view-file-re)
+(defvar log-view-font-lock-keywords)
+(defvar log-view-per-file-logs)
+(defvar log-view-expanded-log-entry-function)
+
+(define-derived-mode vc-tfs-log-view-mode log-view-mode "TFS-Log-View"
+  (require 'add-log)
+  (set (make-local-variable 'log-view-file-re) "\\`a\\`")
+  (set (make-local-variable 'log-view-per-file-logs) nil)
+  (set (make-local-variable 'log-view-message-re)
+       "^Changeset: \\([0-9]+\\)")
+  (set (make-local-variable 'log-view-font-lock-keywords)
+       (append
+	`((,log-view-message-re (1 'change-log-acknowledgment)))
+	'(("^User: \\(.+\\)" (1 'change-log-name))
+	  ("^Date: \\(.+\\)" (1 'change-log-date))))))
 
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
   "Get a difference report using TFS between two revisions of fileset FILES."
@@ -300,6 +320,41 @@ If LIMIT is non-nil, show no more than this many entries."
 	;; For some reason `tfs diff' does not return a useful
 	;; status w.r.t whether the diff was empty or not.
 	(buffer-size (get-buffer buffer)))))
+
+;;;
+;;; Directory functions
+;;;
+
+(defun vc-tfs-after-dir-status (callback)
+  (let ((state-map '(("add" . added)
+		     ("edit" . edited)))	; TODO Find other values
+	(re "^\\(.*\\) +\\(edit\\|add\\) +\\(.*\\)$")
+	result)
+    (goto-char (point-min))
+    (while (re-search-forward re nil t)
+      (let ((state (cdr (assoc (match-string 2) state-map)))
+	    (filename (file-relative-name
+		       (replace-regexp-in-string "\\\\" "/" (match-string 3))
+		       default-directory)))
+	(setq result (cons (list filename state) result))))
+    (funcall callback result)))
+
+;; TODO How to list unknown files. Should I use properties?
+
+;; TODO Better use a detailed format parser (same for logs) because
+;; columns are fixed length (but then dates are locale)
+
+(declare-function vc-exec-after "vc-dispatcher" (code))
+
+(defun vc-tfs-dir-status (dir callback)
+  "Return a list build from status of files in DIR."
+  (vc-tfs-command (current-buffer) 'async dir "status" "/recursive")
+  (vc-run-delayed
+    (vc-tfs-after-dir-status callback)))
+
+;; TODO vc-tfs-dir-status-files
+
+;; TODO vc-svn-dir-extra-headers for workspace root
 
 ;;;
 ;;; Internal functions
