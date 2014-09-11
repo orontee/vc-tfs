@@ -8,7 +8,9 @@
 (add-to-list 'vc-handled-backends 'TFS)
 
 ;; Todos
-;; - simple vc-dir
+;; - vc-update (must implement merge-news)
+;; - vc-root-diff
+;; - vc-print-root-log
 ;; - vc-dir with shelves
 ;; - Short and long format for logs
 ;; - Rollback
@@ -19,6 +21,10 @@
 ;; Bugs:
 ;; - vc-diff C-cC-c is not working (not searching for the right file,
 ;; see diff-find-file-name)
+;; - diff or log on selected files in vc-dir
+;; - Characters encoding in log buffers
+;; - Output parsing is dependant on locale
+;; - Check logs, missing /version:W
 
 ;;; Code:
 
@@ -78,6 +84,14 @@ of arguments, use t."
   :version "24.4"
   :group 'vc-tfs)
 
+;;;
+
+(defvar vc-tfs-brief-log-format
+  '("^\\(?1:[0-9]+\\) +\\(?:[a-z,]+\\) +\\(?2:.\\{17\\}\\) +\\(?3:.\\{10\\}\\) +\\(?4:.+\\)"
+    (1 'log-view-message-face)
+    (2 'change-log-name)
+    (3 'change-log-date)))
+
 ;;; Properties of the backend
 
 (defun vc-tfs-revision-granularity () 'repository)
@@ -102,6 +116,17 @@ of arguments, use t."
 		(vc-tfs-command t t file "localversions")
 	      (error nil))))
       (eq 0 status))))
+
+;; TODO Why not use something as simple as vc-tfs-responsible-p?
+
+;; (defun vc-tfs-root (file)
+;;   "Return the root of the hierarchy for FILE."
+;;   (with-temp-buffer
+;;     (let ((dir (or (and (file-directory-p file) file) (file-name-directory file)))
+;; 	  (re " $/.+: \\(.+\\)"))
+;;       (cd dir)
+;;       (vc-tfs-command t 0 dir "workspaces")
+;;       (re-search-forward re)
 
 (defun vc-tfs-state (file)
   "TFS-specific function to compute the version control state."
@@ -164,8 +189,6 @@ of arguments, use t."
 
 ;; TODO Does TFS handles ignored files?
 
-;; TODO Prepare for internationalization
-
 (defun vc-tfs-checkout-model (_files) 'announce)
 
 ;;;
@@ -174,14 +197,18 @@ of arguments, use t."
 
 (defun vc-tfs-create-repo (backend)
   "Create a workspace and a workspace mapping."
-  ;;  (vc-tfs-command "*vc*" 0 "workspace" '("/new" "/noprompt"))
-  ;; Use workfold to create a mapping
+  ;; (vc-tfs-command "*vc*" 0 name "workspace" '("/new" "/noprompt" "/collection:"))
+  ;; (vc-tfs-command "*vc*" 0 nil "workfold" '("/map $/ ." ))
   (error "Not yet implemented"))
 
 (defun vc-tfs-register (files &optional rev comment)
   "Register FILES into the TFS version-control system.  
 The REV and COMMENT arguments are ignored."
   (apply 'vc-tfs-command nil 0 files "add" (vc-switches 'TFS 'register)))
+
+(defun vc-tfs-responsible-p (file)
+  (let ((status (vc-tfs-command nil 1 file "localversions")))
+    (equal status 0)))
 
 (defun vc-tfs-checkin (file rev comment)
   "Commit changes in FILES into the TFS version-control system."
@@ -203,12 +230,9 @@ If REV is the empty string, fetch the revision of the workspace."
     (apply 'vc-tfs-command
 	   buffer 0 file "view"
 	   (nconc
-	    (list "/noprompt")
 	    (and rev (not (string= rev ""))
-		(list (concat "/version:C" rev)))
-	    (vc-switches 'TFS 'checkout)))))
-
-;; TODO Check that the switch is well computed
+		 (list (concat "/version:C" rev)))
+	    (list "/noprompt")))))
 
 (defun vc-tfs-checkout (file &optional editable rev)
   ;; TODO Don't recreate file when existing with required version
@@ -256,17 +280,22 @@ If LIMIT is non-nil, show no more than this many entries."
 			 (format "/version:C%s" start-revision)
 		       "/version:T"))
 		    (list "/noprompt")
-		    (list "/format:detailed")
+		    (when (not shortlog) (list "/format:detailed"))
 		    (when limit (list (format "/stopafter:%s" limit))))))
 	(apply 'vc-tfs-command buffer 0 (list ".") "history"
 	       (append
 		(list
 		 (if start-revision (format "/version:C%s" start-revision) "/version:T"))
 		(list "/noprompt")
-		(list "/format:detailed")
+		(when (not shortlog) (list "/format:detailed"))
 		(when limit (list (format "/stopafter:%s" limit)))))))))
 
-;; TODO Handle short logs
+;; TODO Throw an error for filesets; Not supported
+
+(defun vc-tfs-log-incoming (buffer remote-location)
+  (apply 'vc-tfs-command buffer 0 default-directory "history"
+	 (append (list "/noprompt")
+		 (list "/version:W~T") (list "/recursive"))))
 
 (defvar log-view-message-re)
 (defvar log-view-file-re)
@@ -276,15 +305,35 @@ If LIMIT is non-nil, show no more than this many entries."
 
 (define-derived-mode vc-tfs-log-view-mode log-view-mode "TFS-Log-View"
   (require 'add-log)
-  (set (make-local-variable 'log-view-file-re) "\\`a\\`")
+  (set (make-local-variable 'log-view-file-re)
+       "^Working file: \\(.+\\)")
   (set (make-local-variable 'log-view-per-file-logs) nil)
   (set (make-local-variable 'log-view-message-re)
-       "^Changeset: \\([0-9]+\\)")
+       (if (not (eq vc-log-view-type 'long))
+	   (car vc-tfs-brief-log-format)
+	 "^Changeset: \\([0-9]+\\)"))
+  (when (eq vc-log-view-type 'short)
+    (setq truncate-lines t)
+    (set (make-local-variable 'log-view-expanded-log-entry-function)
+	 'vc-tfs-expanded-log-entry))
   (set (make-local-variable 'log-view-font-lock-keywords)
-       (append
-	`((,log-view-message-re (1 'change-log-acknowledgment)))
-	'(("^User: \\(.+\\)" (1 'change-log-name))
-	  ("^Date: \\(.+\\)" (1 'change-log-date))))))
+       (if (not (eq vc-log-view-type 'long))
+	   (list vc-tfs-brief-log-format)
+	 (append
+	  `((,log-view-message-re (1 'change-log-acknowledgment))
+	    (,log-view-file-re (1 'change-log-file)))
+	  '(("^User: \\(.+\\)" (1 'change-log-name))
+	    ("^Date: \\(.+\\)" (1 'change-log-date)))))))
+
+(defun vc-tfs-expanded-log-entry (revision)
+  (with-temp-buffer
+    (apply 'vc-tfs-command t nil nil "changeset"
+	   (append (list revision)
+		   (list "/noprompt")))
+    (goto-char (point-min))
+    (unless (eobp)
+      (indent-region (point-min) (point-max) 2)
+      (buffer-string))))
 
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
   "Get a difference report using TFS between two revisions of fileset FILES."
@@ -321,6 +370,8 @@ If LIMIT is non-nil, show no more than this many entries."
 	;; status w.r.t whether the diff was empty or not.
 	(buffer-size (get-buffer buffer)))))
 
+;; TODO Throw an error for filesets; Not supported
+
 ;;;
 ;;; Directory functions
 ;;;
@@ -341,8 +392,8 @@ If LIMIT is non-nil, show no more than this many entries."
 
 ;; TODO How to list unknown files. Should I use properties?
 
-;; TODO Better use a detailed format parser (same for logs) because
-;; columns are fixed length (but then dates are locale)
+;; TODO Should we use the detailed format to prevent troubles with
+;; fixed length columns
 
 (declare-function vc-exec-after "vc-dispatcher" (code))
 
@@ -354,7 +405,7 @@ If LIMIT is non-nil, show no more than this many entries."
 
 ;; TODO vc-tfs-dir-status-files
 
-;; TODO vc-svn-dir-extra-headers for workspace root
+;; TODO vc-tfs-dir-extra-headers for workspace root
 
 ;;;
 ;;; Internal functions
