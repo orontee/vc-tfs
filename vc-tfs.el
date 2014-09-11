@@ -3,33 +3,32 @@
 ;; Author: Matthias Meulien <orontee@gmail.com>
 ;; Package: vc
 
-;; Note that this implementation is based on vc-svn.el.
+;; Note that most of this implementation was taken from vc-svn.el and
+;; vc-git.el.
 
-(add-to-list 'vc-handled-backends 'TFS)
-
-;; Todos
+;; Todos:
 ;; - vc-update (must implement merge-news)
 ;; - vc-root-diff
 ;; - vc-print-root-log
-;; - vc-dir with shelves
-;; - Short and long format for logs
+;; - Shelves support (shelve, view, unshelve, delete, list)
 ;; - Rollback
-;; - Workspace in `help-echo' property of mode line string
 ;; - Revision completion
+;; - Change comment modification (modify-change-comment)
 ;; - Delete, rename files
+;; - Other todos can be found in the source code
 
 ;; Bugs:
 ;; - vc-diff C-cC-c is not working (not searching for the right file,
 ;; see diff-find-file-name)
-;; - diff or log on selected files in vc-dir
 ;; - Characters encoding in log buffers
-;; - Output parsing is dependant on locale
-;; - Check logs, missing /version:W
+;; - Output parsing is dependant on language (bind locally `process-environment')
 
 ;;; Code:
 
 (eval-when-compile
   (require 'vc))
+
+(add-to-list 'vc-handled-backends 'TFS)
 
 ;; Clear up the cache to force vc-call to check again and discover
 ;; new functions when we reload this file.
@@ -83,15 +82,7 @@ of arguments, use t."
 		 (repeat :tag "Argument List" :value ("") string))
   :version "24.4"
   :group 'vc-tfs)
-
-;;;
-
-(defvar vc-tfs-brief-log-format
-  '("^\\(?1:[0-9]+\\) +\\(?:[a-z,]+\\) +\\(?2:.\\{17\\}\\) +\\(?3:.\\{10\\}\\) +\\(?4:.+\\)"
-    (1 'log-view-message-face)
-    (2 'change-log-name)
-    (3 'change-log-date)))
-
+ 
 ;;; Properties of the backend
 
 (defun vc-tfs-revision-granularity () 'repository)
@@ -127,6 +118,10 @@ of arguments, use t."
 ;;       (cd dir)
 ;;       (vc-tfs-command t 0 dir "workspaces")
 ;;       (re-search-forward re)
+
+;; Perform a status of current directory, read Workspace name from
+;; there, then run workspaces command with that name and detailed
+;; format to get the mapping
 
 (defun vc-tfs-state (file)
   "TFS-specific function to compute the version control state."
@@ -181,15 +176,13 @@ of arguments, use t."
 	 ((equal change "none")
 	  (if obsolete 'needs-update 'up-to-date))
 	 ((equal change "add") 'added)
-	 ((equal change "deleted") 'removed)
-	 ((equal change "conflict") 'conflict)
-	 ((equal change "missing") 'missing)
+	 ;; TODO Complete with other values of `change'
 	 (t (error (concat "Not implemented state: " change))))))
      (t 'unregistered))))
 
-;; TODO Does TFS handles ignored files?
-
-(defun vc-tfs-checkout-model (_files) 'announce)
+(defun vc-tfs-checkout-model (_files)
+   ;; TODO This should be dependent on host properties
+  'announce)
 
 ;;;
 ;;; State-changing functions
@@ -206,20 +199,21 @@ of arguments, use t."
 The REV and COMMENT arguments are ignored."
   (apply 'vc-tfs-command nil 0 files "add" (vc-switches 'TFS 'register)))
 
-(defun vc-tfs-responsible-p (file)
-  (let ((status (vc-tfs-command nil 1 file "localversions")))
-    (equal status 0)))
+(defalias 'vc-tfs-responsible-p 'vc-tfs-registered)
+
+;; TODO We'd better check if file is a descendant of a workspace
+;; root
 
 (defun vc-tfs-checkin (file rev comment)
   "Commit changes in FILES into the TFS version-control system."
   (let ((status (apply 'vc-tfs-command nil 1 files "checkin"
-		       (nconc (list "/comment" comment) (vc-switches 'TFS 'checkin)))))
+		       (nconc (list "/comment" comment)
+			      (vc-switches 'TFS 'checkin)))))
     (set-buffer "*vc*")
     (goto-char (point-min))
     (unless (equal status 0)
+      ;; TODO Check failure reason to suggest merge
       (error "Check-in failed"))))
-
-;; TODO Check failure reason to suggest merge
 
 (defun vc-tfs-find-revision (file rev buffer)
   "Fetch revision REV of file FILE from the TFS version-control
@@ -230,28 +224,27 @@ If REV is the empty string, fetch the revision of the workspace."
     (apply 'vc-tfs-command
 	   buffer 0 file "view"
 	   (nconc
-	    (and rev (not (string= rev ""))
-		 (list (concat "/version:C" rev)))
+	    `(,(if (and rev (not (string= rev ""))
+			(concat "/version:C" rev))
+		   "/version:W"))
 	    (list "/noprompt")))))
 
 (defun vc-tfs-checkout (file &optional editable rev)
-  ;; TODO Don't recreate file when existing with required version
+  ;; TODO Don't recreate file if it already exists with required
+  ;; version
   (apply 'vc-tfs-command nil 0 file "get"
 	   (append
-	    (list "/noprompt")
 	    (cond
-	     ((null rev) (list "/version:T"))
-	     ((or (eq rev t) (equal rev "")) nil)
-	     (t (list (concat "/version:C" rev))))))
+	     ((null rev) (list "/version:W"))
+	     ((or (eq rev t) (equal rev "")) "/version:T")
+	     (t (list (concat "/version:C" rev))))
+	    (list "/noprompt")))
   (vc-tfs-command nil 0 file "checkout" (vc-switches 'TFS 'checkout)))
 
 (defun vc-tfs-revert (file &optional contents-done)
   "Removes pending changes from the workspace for FILE."
   (unless contents-done
     (vc-tfs-command nil 0 file "undo")))
-
-;; TODO Check that if the file is in the `added' state it is returned
-;; back to the `unregistered' state
 
 ;;;
 ;;; History functions
@@ -263,39 +256,28 @@ SHORTLOG and START-REVISION are ignored.
 If LIMIT is non-nil, show no more than this many entries."
   (save-current-buffer
     (vc-setup-buffer buffer)
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+	  (file (if (listp files)
+		    (if (eq (length files) 1)
+			(car files)
+		      (error "Fileset log is not supported"))
+		  files)))
       (goto-char (point-min))
-      (if files
-	  (dolist (file files)
-		  (insert "Working file: " file "\n")
-		  (apply
-		   'vc-tfs-command
-		   buffer
-		   'async
-		   (list file)
-		   "history"
-		   (append
-		    (list
-		     (if start-revision
-			 (format "/version:C%s" start-revision)
-		       "/version:T"))
-		    (list "/noprompt")
-		    (when (not shortlog) (list "/format:detailed"))
-		    (when limit (list (format "/stopafter:%s" limit))))))
-	(apply 'vc-tfs-command buffer 0 (list ".") "history"
-	       (append
-		(list
-		 (if start-revision (format "/version:C%s" start-revision) "/version:T"))
-		(list "/noprompt")
-		(when (not shortlog) (list "/format:detailed"))
-		(when limit (list (format "/stopafter:%s" limit)))))))))
-
-;; TODO Throw an error for filesets; Not supported
+      (apply 'vc-tfs-command buffer 'async (list file) "history"
+	     (append
+	      (list
+	       (if start-revision
+		   (format "/version:C%s" start-revision)
+		 "/version:W"))
+	      (when (not shortlog) (list "/format:detailed"))
+	      (when limit (list (format "/stopafter:%s" limit)))
+	      (list "/noprompt"))))))
 
 (defun vc-tfs-log-incoming (buffer remote-location)
   (apply 'vc-tfs-command buffer 0 default-directory "history"
-	 (append (list "/noprompt")
-		 (list "/version:W~T") (list "/recursive"))))
+	 (append (list "/version:W~T")
+		 (list "/recursive")
+		 (list "/noprompt"))))
 
 (defvar log-view-message-re)
 (defvar log-view-file-re)
@@ -303,27 +285,48 @@ If LIMIT is non-nil, show no more than this many entries."
 (defvar log-view-per-file-logs)
 (defvar log-view-expanded-log-entry-function)
 
+;; Surprisingly, the command "tf history" changes its output format
+;; according to the "/recursive" option
+
+(defvar vc-tfs-brief-log-formats
+  '(default
+     "^\\(?1:[0-9]+\\) +\\(?:[a-z,]+\\) +\\(?2:.\\{17\\}\\) +\\(?3:.\\{10\\}\\) +\\(?4:.+\\)"
+     recursive
+     "^\\(?1:[0-9]+\\) +\\(?2:.\\{17\\}\\) +\\(?3:.\\{10\\}\\) +\\(?4:.+\\)"))
+
+(defun vc-tfs-guess-brief-log-format ()
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward "^Changeset +Change " nil t 1)
+    (let ((type (if (eq (match-string 0) nil) 'recursive 'default)))
+      (cons
+       (plist-get vc-tfs-brief-log-formats type)
+       '((1 'log-view-message-face)
+	 (2 'change-log-name)
+	 (3 'change-log-date))))))
+
 (define-derived-mode vc-tfs-log-view-mode log-view-mode "TFS-Log-View"
   (require 'add-log)
-  (set (make-local-variable 'log-view-file-re)
-       "^Working file: \\(.+\\)")
-  (set (make-local-variable 'log-view-per-file-logs) nil)
-  (set (make-local-variable 'log-view-message-re)
-       (if (not (eq vc-log-view-type 'long))
-	   (car vc-tfs-brief-log-format)
-	 "^Changeset: \\([0-9]+\\)"))
-  (when (eq vc-log-view-type 'short)
-    (setq truncate-lines t)
-    (set (make-local-variable 'log-view-expanded-log-entry-function)
-	 'vc-tfs-expanded-log-entry))
-  (set (make-local-variable 'log-view-font-lock-keywords)
-       (if (not (eq vc-log-view-type 'long))
-	   (list vc-tfs-brief-log-format)
-	 (append
-	  `((,log-view-message-re (1 'change-log-acknowledgment))
-	    (,log-view-file-re (1 'change-log-file)))
-	  '(("^User: \\(.+\\)" (1 'change-log-name))
-	    ("^Date: \\(.+\\)" (1 'change-log-date)))))))
+  (let ((brief-log-format
+	 (and (not (eq vc-log-view-type 'long))
+	      (vc-tfs-guess-brief-log-format))))
+    (set (make-local-variable 'log-view-file-re) "\\`a\\`")
+    (set (make-local-variable 'log-view-per-file-logs) nil)
+    (set (make-local-variable 'log-view-message-re)
+	 (if brief-log-format
+	     (car brief-log-format)
+	   "^Changeset: \\([0-9]+\\)"))
+    (when (eq vc-log-view-type 'short)
+      (setq truncate-lines t)
+      (set (make-local-variable 'log-view-expanded-log-entry-function)
+	   'vc-tfs-expanded-log-entry))
+    (set (make-local-variable 'log-view-font-lock-keywords)
+	 (if brief-log-format
+	     (list brief-log-format)
+	   (append
+	    `((,log-view-message-re (1 'change-log-acknowledgment)))
+	    '(("^User: \\(.+\\)" (1 'change-log-name))
+	      ("^Date: \\(.+\\)" (1 'change-log-date))))))))
 
 (defun vc-tfs-expanded-log-entry (revision)
   (with-temp-buffer
@@ -335,42 +338,30 @@ If LIMIT is non-nil, show no more than this many entries."
       (indent-region (point-min) (point-max) 2)
       (buffer-string))))
 
+;; TODO Optionally Remove empty lines and useless info
+
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
   "Get a difference report using TFS between two revisions of fileset FILES."
-  (and oldvers
-       (not newvers)
-       files
-       (catch 'no
-	 (dolist (f files)
-	   (or (equal oldvers (vc-working-revision f))
-	       (throw 'no nil)))
-	 t)
-       ;; Use nil rather than the current revision because tfs handles
-       ;; it better (i.e. locally).  Note that if _any_ of the files
-       ;; has a different revision, we fetch the lot, which is
-       ;; obviously sub-optimal.
-       (setq oldvers nil))
-  (let* ((switches
-	    (if vc-tfs-diff-switches
-		(vc-switches 'TFS 'diff)
-	      (list "/format:Unified"
-		    (mapconcat 'identity (vc-switches nil 'diff) " "))))
-	   (async (and (not vc-disable-async-diff)
-                       (vc-stay-local-p files 'TFS))))
-      (apply 'vc-tfs-command buffer
-	     (if async 'async 0)
-	     files "diff"
-	     (append
-	      switches
-	      (when oldvers
-		(list "/version:C" (if newvers (concat oldvers "~C" newvers)
-			     oldvers)))))
-      (if async 1		      ; async diff => pessimistic assumption
-	;; For some reason `tfs diff' does not return a useful
-	;; status w.r.t whether the diff was empty or not.
-	(buffer-size (get-buffer buffer)))))
-
-;; TODO Throw an error for filesets; Not supported
+  (let ((file (if (listp files)
+		  (if (eq (length files) 1)
+		      (car files)
+		    (error "Fileset log is not supported"))
+		files))		;TODO Could iterate through files
+	(switches
+	 (if vc-tfs-diff-switches
+	     (vc-switches 'TFS 'diff)
+	   (nconc (list "/format:Unified")
+		  (vc-switches nil 'diff)))))
+    (apply 'vc-tfs-command buffer 'async file "diff"
+	   (append
+	    switches
+	    (list 
+	     (if oldvers
+		 (concat "/version:C"
+			 (if newvers (concat oldvers "~C" newvers)
+			   oldvers))
+	       (concat "/version:W" (when newvers "~C" newvers)))))))
+  1)
 
 ;;;
 ;;; Directory functions
