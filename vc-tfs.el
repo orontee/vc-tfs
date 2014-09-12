@@ -8,19 +8,21 @@
 
 ;; Todos:
 ;; - vc-update (must implement merge-news)
-;; - vc-root-diff
-;; - vc-print-root-log
-;; - Shelves support (shelve, view, unshelve, delete, list)
 ;; - Rollback
 ;; - Revision completion
 ;; - Change comment modification (modify-change-comment)
 ;; - Delete, rename files
+;; - Previous, next revision for log-view-diff-changeset
+;; - Optionally Remove empty lines and useless info from long logs
+;; - Exploit opened for edit informations
 ;; - Other todos can be found in the source code
 
 ;; Bugs:
-;; - vc-diff C-cC-c is not working (not searching for the right file,
-;; see diff-find-file-name)
-;; - Characters encoding in log buffers
+;; - wrong default-directory when running `vc-print-root-log'
+;; - log-view-find-revision not working
+;; - cursor always at the end of the long log buffer
+;; - `diff-hunk-file-names' does not found the file names
+;; - Characters encoding in log buffers (bind locally `coding-system-for-read')
 ;; - Output parsing is dependant on language (bind locally `process-environment')
 
 ;;; Code:
@@ -108,20 +110,18 @@ of arguments, use t."
 	      (error nil))))
       (eq 0 status))))
 
-;; TODO Why not use something as simple as vc-tfs-responsible-p?
-
-;; (defun vc-tfs-root (file)
-;;   "Return the root of the hierarchy for FILE."
-;;   (with-temp-buffer
-;;     (let ((dir (or (and (file-directory-p file) file) (file-name-directory file)))
-;; 	  (re " $/.+: \\(.+\\)"))
-;;       (cd dir)
-;;       (vc-tfs-command t 0 dir "workspaces")
-;;       (re-search-forward re)
-
-;; Perform a status of current directory, read Workspace name from
-;; there, then run workspaces command with that name and detailed
-;; format to get the mapping
+(defun vc-tfs-root (file)
+  "Return the root of the hierarchy for FILE."
+  (with-temp-buffer
+    (let ((dir
+	   (if (file-directory-p file)
+	       file
+	     (file-name-directory file))))
+      (cd dir)
+      (vc-tfs-command t 0 nil "workfold")
+      (goto-char (point-min))
+      (when (re-search-forward " \\$.+: \\(.*\\)")
+	(match-string 1)))))
 
 (defun vc-tfs-state (file)
   "TFS-specific function to compute the version control state."
@@ -224,9 +224,9 @@ If REV is the empty string, fetch the revision of the workspace."
     (apply 'vc-tfs-command
 	   buffer 0 file "view"
 	   (nconc
-	    `(,(if (and rev (not (string= rev ""))
-			(concat "/version:C" rev))
-		   "/version:W"))
+	    `(,(if (and rev (not (string= rev "")))
+		   (concat "/version:C" rev)
+		 "/version:W"))
 	    (list "/noprompt")))))
 
 (defun vc-tfs-checkout (file &optional editable rev)
@@ -251,7 +251,7 @@ If REV is the empty string, fetch the revision of the workspace."
 ;;;
 
 (defun vc-tfs-print-log (files buffer &optional shortlog start-revision limit)
-    "Print commit log associated with FILES into specified BUFFER.
+  "Print commit log associated with FILES into specified BUFFER.
 SHORTLOG and START-REVISION are ignored.
 If LIMIT is non-nil, show no more than this many entries."
   (save-current-buffer
@@ -297,8 +297,10 @@ If LIMIT is non-nil, show no more than this many entries."
 (defun vc-tfs-guess-brief-log-format ()
   (save-excursion
     (goto-char (point-min))
-    (re-search-forward "^Changeset +Change " nil t 1)
-    (let ((type (if (eq (match-string 0) nil) 'recursive 'default)))
+    (let ((type
+	   (if (re-search-forward "^Changeset +Change " nil t 1)
+	       'default
+	     'recursive)))
       (cons
        (plist-get vc-tfs-brief-log-formats type)
        '((1 'log-view-message-face)
@@ -338,20 +340,20 @@ If LIMIT is non-nil, show no more than this many entries."
       (indent-region (point-min) (point-max) 2)
       (buffer-string))))
 
-;; TODO Optionally Remove empty lines and useless info
-
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
   "Get a difference report using TFS between two revisions of fileset FILES."
-  (let ((file (if (listp files)
-		  (if (eq (length files) 1)
-		      (car files)
-		    (error "Fileset log is not supported"))
-		files))		;TODO Could iterate through files
-	(switches
-	 (if vc-tfs-diff-switches
-	     (vc-switches 'TFS 'diff)
-	   (nconc (list "/format:Unified")
-		  (vc-switches nil 'diff)))))
+  (let* ((file (if (listp files)
+		   (if (eq (length files) 1)
+		       (car files)
+		     (error "Fileset log is not supported"))
+		 files))		;TODO Could iterate through files
+	 (switches
+	  (append
+	   (when (file-directory-p file) (list "/recursive"))
+	   (if vc-tfs-diff-switches
+	       (vc-switches 'TFS 'diff)
+	     (nconc (list "/format:Unified")
+		    (vc-switches nil 'diff))))))
     (apply 'vc-tfs-command buffer 'async file "diff"
 	   (append
 	    switches
@@ -381,7 +383,7 @@ If LIMIT is non-nil, show no more than this many entries."
 	(setq result (cons (list filename state) result))))
     (funcall callback result)))
 
-;; TODO How to list unknown files. Should I use properties?
+;; TODO How to list unknown files. Should we use properties?
 
 ;; TODO Should we use the detailed format to prevent troubles with
 ;; fixed length columns
@@ -390,13 +392,124 @@ If LIMIT is non-nil, show no more than this many entries."
 
 (defun vc-tfs-dir-status (dir callback)
   "Return a list build from status of files in DIR."
+  (cd dir)
   (vc-tfs-command (current-buffer) 'async dir "status" "/recursive")
   (vc-run-delayed
     (vc-tfs-after-dir-status callback)))
 
-;; TODO vc-tfs-dir-status-files
+(defvar vc-tfs-shelve-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-2] 'ignore)
 
-;; TODO vc-tfs-dir-extra-headers for workspace root
+    (define-key map [down-mouse-3] 'vc-tfs-shelve-menu)
+    (define-key map "\C-k" 'vc-tfs-shelve-delete-at-point)
+    (define-key map "U" 'vc-tfs-shelve-unshelve-at-point)
+    (define-key map "=" 'vc-tfs-shelve-view-at-point)
+    map))
+
+(defvar vc-tfs-shelve-menu-map
+  (let ((map (make-sparse-keymap "TFS Shelve")))
+    (define-key map [de]
+      '(menu-item "Delete shelve" vc-tfs-shelve-delete-at-point
+		  :help "Delete the current shelve"))
+    (define-key map [un]
+      '(menu-item "Unshelve shelve" vc-tfs-shelve-unshelve-at-point
+		  :help "Unshelve the current shelve"))
+    (define-key map [vi]
+      '(menu-item "View shelve" vc-tfs-shelve-view-at-point
+		  :help "View the contents of the current shelve"))
+    map))
+
+(defun vc-tfs-dir-extra-headers (dir)
+  (let ((shelveset (vc-tfs-shelve-list))
+	(shelve-help-echo "Use M-x vc-tfs-shelve to create a shelve."))
+    (if shelveset
+	(concat
+	 (propertize "Shelves    :\n" 'face 'font-lock-type-face
+		     'help-echo shelve-help-echo)
+	 (mapconcat
+	  (lambda (x)
+	    (propertize x
+			'face 'font-lock-variable-name-face
+			'mouse-face 'highlight
+			'help-echo "mouse-3: Show shelve menu"
+			'keymap vc-tfs-shelve-map))
+	  shelveset "\n"))
+      (concat
+       (propertize "Shelves      : " 'face 'font-lock-type-face
+		   'help-echo shelve-help-echo)
+       (propertize "No shelve"
+		   'help-echo shelve-help-echo
+		   'face 'font-lock-variable-name-face)))))
+
+;;;
+;;; Shelve functions
+;;;
+
+(defun vc-tfs-shelve-list ()
+  (with-temp-buffer
+    (vc-tfs-command t nil nil "shelvesets")
+    (goto-char (point-min))
+    (forward-line 2)
+    (let ((re "^\\([^ ]+\\) ")		; FIXME Don't work when shelve
+					; name contain whitespaces
+	  result)
+      (while (re-search-forward re nil t)
+	(setq result
+	      (cons (concat "             " (match-string 1)) result)))
+      result)))
+
+(defun vc-tfs-shelve (name)
+  "Shelve the pending changes."
+  (interactive "sShelve name: ")
+  (when (not (equal name ""))
+    (vc-tfs-command "*vc-tfs-shelve*" 'async nil "shelve" name)
+    (vc-dir-refresh)))
+
+(defun vc-tfs-shelve-view (name)
+  "View the content of shelve NAME."
+  (interactive "sShelve name: ")
+  (vc-setup-buffer "*vc-tfs-shelve*")
+  (vc-tfs-command "*vc-tfs-shelve*" 'async nil "diff"
+		  "/noprompt" (concat "/shelveset:" name))
+  (set-buffer "*vc-tfs-shelve*")
+  (diff-mode)
+  (setq buffer-read-only t)
+  (pop-to-buffer (current-buffer)))
+
+(defun vc-tfs-shelve-unshelve (name)
+  "Unshelve shelve NAME."
+  (interactive "sUnshelve: ")
+  (when (not (equal name ""))
+    (vc-tfs-command "*vc-tfs-shelve*" 'async nil "unshelve" "/noprompt" name)))
+
+(defun vc-tfs-shelve-get-at-point (point)
+  (save-excursion
+    (goto-char point)
+    (beginning-of-line)
+    (if (looking-at "^ +\\(.+\\)")
+	(match-string 1)
+      (error "Cannot find shelve at point"))))
+
+(defun vc-tfs-shelve-delete-at-point ()
+  (interactive)
+  (let ((name (vc-tfs-shelve-get-at-point (point))))
+    (when (y-or-n-p (format "Delete shelve %s ? " name))
+      (vc-tfs-command "*vc-tfs-shelve*" 'async nil "shelve"
+		      "/delete" "/noprompt" name)
+      (vc-dir-refresh))))
+
+(defun vc-tfs-shelve-view-at-point ()
+  (interactive)
+  (vc-tfs-shelve-view (vc-tfs-shelve-get-at-point (point))))
+
+(defun vc-tfs-shelve-unshelve-at-point ()
+  (interactive)
+  (vc-tfs-shelve-unshelve (vc-tfs-shelve-get-at-point (point))))
+
+(defun vc-tfs-shelve-menu (e)
+  (interactive "e")
+  (vc-dir-at-event e (popup-menu vc-tfs-shelve-menu-map e)))
 
 ;;;
 ;;; Internal functions
