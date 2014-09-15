@@ -3,7 +3,7 @@
 ;; Copyright (C) 2014 Matthias Meulien
 
 ;; Author: Matthias Meulien <orontee@gmail.com>
-;; Keywords: vc tools 
+;; Keywords: vc tools
 ;; Package: vc
 ;; URL: https://gitorious.org/vc-tfs-el
 ;; Version: 0.1
@@ -134,7 +134,7 @@ of arguments, use t."
       (eq 0 status))))
 
 (defun vc-tfs-state (file)
-  "TFS-specific function to compute the version control state."
+  "TFS-specific function to compute FILE version control state."
   (if (not (vc-tfs-registered file))
       'unregistered
     (with-temp-buffer
@@ -205,8 +205,7 @@ of arguments, use t."
   (error "Not yet implemented"))
 
 (defun vc-tfs-register (files &optional _rev _comment)
-  "Register FILES into the TFS version-control system.  
-The REV and COMMENT arguments are ignored."
+  "Register FILES into the TFS version control system."
   (apply 'vc-tfs-command nil 0 files "add" (vc-switches 'TFS 'register)))
 
 (defalias 'vc-tfs-responsible-p 'vc-tfs-registered)
@@ -215,7 +214,7 @@ The REV and COMMENT arguments are ignored."
 ;; root
 
 (defun vc-tfs-checkin (files _rev comment)
-  "Commit changes in FILES into the TFS version-control system."
+  "Commit changes in FILES into the TFS version control system."
   (let* ((files (mapcar 'convert-standard-filename files))
 	 (args (nconc (list "/comment:\"" comment "\"")
 		      (vc-switches 'TFS 'checkin)))
@@ -227,9 +226,7 @@ The REV and COMMENT arguments are ignored."
       (error "Check-in failed"))))
 
 (defun vc-tfs-find-revision (file rev buffer)
-  "Fetch revision REV of file FILE from the TFS version-control
-system.
-
+  "Fetch revision REV of file FILE from the TFS version control system.
 If REV is the empty string, fetch the revision of the workspace."
   (let (process-file-side-effects)
     (apply 'vc-tfs-command
@@ -253,11 +250,13 @@ If REV is the empty string, fetch the revision of the workspace."
   (vc-tfs-command nil 0 file "checkout" (vc-switches 'TFS 'checkout)))
 
 (defun vc-tfs-revert (file &optional contents-done)
-  "Removes pending changes from the workspace for FILE."
+  "Remove pending changes from the workspace for FILE.
+Does nothing in case CONTENTS-DONE is non-nil."
   (unless contents-done
     (vc-tfs-command nil 0 file "undo")))
 
 (defun vc-tfs-pull (_prompt)
+  "Get last changesets from the TFS version control system."
   (let* ((root default-directory)
 	 (buffer (format "*vc-tfs : %s*" (expand-file-name root))))
     (apply 'vc-tfs-command buffer 'async root "get"
@@ -271,8 +270,10 @@ If REV is the empty string, fetch the revision of the workspace."
 
 (defun vc-tfs-print-log (files buffer &optional shortlog start-revision limit)
   "Print commit log associated with FILES into specified BUFFER.
-SHORTLOG and START-REVISION are ignored.
-If LIMIT is non-nil, show no more than this many entries."
+If SHORTLOG is non-nil, detailed entries are printed. Displayed
+entries start at START-REVISION if non-nil; Otherwise they start
+with the workspace revision. If LIMIT is non-nil, show no more
+than this many entries."
   (save-current-buffer
     (vc-setup-buffer buffer)
     (let ((coding-system-for-read vc-tfs-coding-system-for-logs)
@@ -294,6 +295,7 @@ If LIMIT is non-nil, show no more than this many entries."
 	      (list "/noprompt"))))))
 
 (defun vc-tfs-log-incoming (buffer _remote-location)
+  "Insert in BUFFER the revision log for the changes received by a pull."
   (apply 'vc-tfs-command buffer 0 default-directory "history"
 	 (append (list "/version:W~T")
 		 (list "/recursive")
@@ -315,8 +317,9 @@ If LIMIT is non-nil, show no more than this many entries."
      "^\\(?1:[0-9]+\\) +\\(?2:.\\{17\\}\\) +\\(?3:.\\{10\\}\\) +\\(?4:.+\\)"))
 
 (defun vc-tfs-guess-brief-log-format ()
-  ;; REMARK Searching the buffer to guess the format does not work
-  ;; because its content can be set asynchronously
+  "Return font-lock keywords matching the brief log format.
+Searching the buffer to guess the format does not work because
+its content can be set asynchronously."
   (let ((type
 	 (if (or (eq vc-log-view-type 'short)
 		 (eq vc-log-view-type 'log-incoming))
@@ -353,6 +356,7 @@ If LIMIT is non-nil, show no more than this many entries."
 	      ("^Date: \\(.+\\)" (1 'change-log-date))))))))
 
 (defun vc-tfs-expanded-log-entry (revision)
+  "Return expanded log entry for REVISION."
   (with-temp-buffer
     (apply 'vc-tfs-command t nil nil "changeset"
 	   (append (list revision)
@@ -363,7 +367,8 @@ If LIMIT is non-nil, show no more than this many entries."
       (buffer-string))))
 
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
-  "Get a difference report using TFS between two revisions of fileset FILES."
+  "Insert in BUFFER a difference report between OLDVERS and NEWVERS of FILES.
+Current implementation does not work when FILES is a list of many files."
   (let* ((file (if (listp files)
 		   (if (eq (length files) 1)
 		       (car files)
@@ -379,7 +384,7 @@ If LIMIT is non-nil, show no more than this many entries."
     (apply 'vc-tfs-command buffer 'async file "diff"
 	   (append
 	    switches
-	    (list 
+	    (list
 	     (if oldvers
 		 (concat "/version:C"
 			 (if newvers (concat oldvers "~C" newvers)
@@ -388,6 +393,7 @@ If LIMIT is non-nil, show no more than this many entries."
   1)
 
 (defun vc-tfs-revision-table (files)
+  "Return the list of changeset ids found in history of FILES."
   (let (process-file-side-effects
 	table)
     (dolist (file files)
@@ -399,6 +405,8 @@ If LIMIT is non-nil, show no more than this many entries."
     table))
 
 (defun vc-tfs-revision-completion-table (files)
+  "Return the completion table for FILES revisions.
+See `vc-tfs-revision-table'."
   (letrec ((table (lazy-completion-table
 		   table (lambda () (vc-tfs-revision-table files)))))
     table))
@@ -408,6 +416,7 @@ If LIMIT is non-nil, show no more than this many entries."
 ;;;
 
 (defun vc-tfs-after-dir-status (callback)
+  "Call CALLBACK with list of file status extracted current buffer."
   (let ((state-map '(("add" . added)
 		     ("edit" . edited)))	; TODO Find other values
 	(re "^\\(.*\\) +\\(edit\\|add\\) +\\(.*\\)$")
@@ -423,13 +432,13 @@ If LIMIT is non-nil, show no more than this many entries."
 
 ;; TODO How to list unknown files. Should we use properties?
 
-;; TODO Should we use the detailed format to prevent troubles with
-;; fixed length columns
+;; TODO Use the detailed format to prevent troubles with fixed length
+;; columns?
 
 (declare-function vc-exec-after "vc-dispatcher" (code))
 
 (defun vc-tfs-dir-status (dir callback)
-  "Return a list build from status of files in DIR."
+  "Return a list build from status of files in DIR and calls to CALLBACK."
   (vc-tfs-command (current-buffer) 'async dir "status" "/recursive")
   (vc-run-delayed
     (vc-tfs-after-dir-status callback)))
@@ -458,6 +467,8 @@ If LIMIT is non-nil, show no more than this many entries."
     map))
 
 (defun vc-tfs-dir-extra-headers (_dir)
+  "Return the string to add to the *vc-dir* buffer header.
+The string is made of the enumeration of shelves."
   (let ((shelveset (vc-tfs-shelve-list))
 	(shelve-help-echo "Use M-x vc-tfs-shelve to create a shelve."))
     (if shelveset
@@ -497,11 +508,15 @@ If LIMIT is non-nil, show no more than this many entries."
 	(match-string 1)))))
 
 (defun vc-tfs-previous-revision (_file rev)
+  "Return the revision preceding REV."
   (let ((newrev (1- (string-to-number rev))))
     (when (< 0 newrev)
       (number-to-string newrev))))
 
 (defun vc-tfs-next-revision (file rev)
+  "Return FILE's revision following REV.
+The returned revision is always lesser than FILE workspace
+revision."
   (let ((newrev (1+ (string-to-number rev))))
     (unless (< (string-to-number (vc-tfs-working-revision file))
 	       newrev)
