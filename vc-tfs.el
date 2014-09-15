@@ -7,11 +7,12 @@
 ;; vc-git.el.
 
 ;; Todos:
-;; - Rollback, branch creation/deletion, labels creation/deletion
-;; - Change comment modification (modify-change-comment)
-;; - Cleanup useless information from long log output
+;; - Rollback
+;; - Branches creation/deletion
+;; - Labels creation/deletion
+;; - Change comment modification (`vc-tfs-modify-change-comment')
 
-;; Most todos are embedded in the source code.
+;; Many todos are embedded in the source code.
 
 ;; Bugs:
 ;; - wrong default-directory when running `vc-print-root-log'
@@ -19,9 +20,10 @@
 ;; - Characters encoding in log buffers (bind locally `coding-system-for-read')
 ;; - Output parsing is dependant on language (bind locally `process-environment')
 
-;; Known limitations:
+;; Known limitations/Questions:
 ;; - `diff-hunk-file-names' does not found the file names in TFS diff hunks
 ;; - Fileset logs and diffs are currently not supported
+;; - Should we use the "*vc*" buffer in place of temporary buffers?
 
 ;;; Code:
 
@@ -288,26 +290,24 @@ If LIMIT is non-nil, show no more than this many entries."
      "^\\(?1:[0-9]+\\) +\\(?2:.\\{17\\}\\) +\\(?3:.\\{10\\}\\) +\\(?4:.+\\)"))
 
 (defun vc-tfs-guess-brief-log-format ()
-  (save-excursion
-    (goto-char (point-min))
-    (let ((type
-	   (if (re-search-forward "^Changeset +Change " nil t 1)
-	       'default
-	     'recursive)))
-      (cons
-       (plist-get vc-tfs-brief-log-formats type)
-       '((1 'log-view-message-face)
-	 (2 'change-log-name)
-	 (3 'change-log-date))))))
+  ;; REMARK Searching the buffer to guess the format does not work
+  ;; because its content can be set asynchronously
+  (let ((type
+	 (if (or (eq vc-log-view-type 'short)
+		 (eq vc-log-view-type 'log-incoming))
+	     'default
+	   'recursive)))
+    (cons
+     (plist-get vc-tfs-brief-log-formats type)
+     '((1 'log-view-message-face)
+       (2 'change-log-name)
+       (3 'change-log-date)))))
 
 (define-derived-mode vc-tfs-log-view-mode log-view-mode "TFS-Log-View"
   (require 'add-log)
   (let ((brief-log-format
 	 (and (not (eq vc-log-view-type 'long))
-	      (vc-tfs-guess-brief-log-format)))) ; FIXME Won't work
-						 ; when setting
-						 ; content
-						 ; asynchronously
+	      (vc-tfs-guess-brief-log-format))))
     (set (make-local-variable 'log-view-file-re) "\\`a\\`")
     (set (make-local-variable 'log-view-per-file-logs) nil)
     (set (make-local-variable 'log-view-message-re)
