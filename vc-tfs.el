@@ -1,4 +1,4 @@
-;;; vc-tfs.el --- support TFS for version control system  -*- lexical-binding:t -*-
+;;; vc-tfs.el --- Support for TFS version control system  -*- lexical-binding:t -*-
 
 ;; Copyright (C) 2014 Matthias Meulien
 
@@ -8,17 +8,30 @@
 ;; URL: https://gitorious.org/vc-tfs-el
 ;; Version: 0.1
 
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 ;;; Commentary:
 
 ;; This file contains a VC backend for the TFS version control system.
-
+;;
 ;; Most of the implementation is taken from vc-svn.el and vc-git.el.
 ;; Note that this package is rather young and has not been tested a
 ;; lot, I recommend you set `vc-command-message' to non-nil before
 ;; use.
 
-;;; Todo:
-
+;; Todo:
+;;
 ;; - Add support for rollback
 ;; - Add support for branches creation/deletion
 ;; - Add support for labels creation/deletion
@@ -28,15 +41,15 @@
 ;;
 ;; Many todos are embedded in the source code.
 
-;;; Bugs:
-
+;; Bugs:
+;;
 ;; - Wrong default-directory when running `vc-print-root-log'
 ;; - Cursor always at the end of long log buffers
 ;; - Output parsing is dependant on language (bind locally `process-environment')
 ;; - There are missing calls to `vc-set-async-update' to keep views up-to-date
 
-;;; Known limitations/Questions:
-
+;; Known limitations/Questions:
+;;
 ;; - `diff-hunk-file-names' does not found the file names in TFS diff hunks
 ;; - Fileset logs and diffs are currently not supported
 ;; - Should we use the "*vc*" buffer in place of temporary buffers?
