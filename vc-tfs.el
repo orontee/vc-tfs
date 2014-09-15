@@ -7,23 +7,21 @@
 ;; vc-git.el.
 
 ;; Todos:
-;; - vc-update (must implement merge-news)
-;; - Rollback
-;; - Revision completion
+;; - Rollback, branch creation/deletion, labels creation/deletion
 ;; - Change comment modification (modify-change-comment)
-;; - Delete, rename files
-;; - Previous, next revision for log-view-diff-changeset
-;; - Optionally Remove empty lines and useless info from long logs
-;; - Exploit opened for edit informations
-;; - Other todos can be found in the source code
+;; - Cleanup useless information from long log output
+
+;; Most todos are embedded in the source code.
 
 ;; Bugs:
 ;; - wrong default-directory when running `vc-print-root-log'
-;; - log-view-find-revision not working
 ;; - cursor always at the end of the long log buffer
-;; - `diff-hunk-file-names' does not found the file names
 ;; - Characters encoding in log buffers (bind locally `coding-system-for-read')
 ;; - Output parsing is dependant on language (bind locally `process-environment')
+
+;; Known limitations:
+;; - `diff-hunk-file-names' does not found the file names in TFS diff hunks
+;; - Fileset logs and diffs are currently not supported
 
 ;;; Code:
 
@@ -105,23 +103,9 @@ of arguments, use t."
     (let* (process-file-side-effects
 	   (status
 	    (condition-case nil
-		;; Ignore all errors.
-		(vc-tfs-command t t file "localversions")
+		(vc-tfs-command t t file "localversions") ; FIXME Fails with added files
 	      (error nil))))
       (eq 0 status))))
-
-(defun vc-tfs-root (file)
-  "Return the root of the hierarchy for FILE."
-  (with-temp-buffer
-    (let ((dir
-	   (if (file-directory-p file)
-	       file
-	     (file-name-directory file))))
-      (cd dir)
-      (vc-tfs-command t 0 nil "workfold")
-      (goto-char (point-min))
-      (when (re-search-forward " \\$.+: \\(.*\\)")
-	(match-string 1)))))
 
 (defun vc-tfs-state (file)
   "TFS-specific function to compute the version control state."
@@ -204,10 +188,10 @@ The REV and COMMENT arguments are ignored."
 ;; TODO We'd better check if file is a descendant of a workspace
 ;; root
 
-(defun vc-tfs-checkin (file rev comment)
+(defun vc-tfs-checkin (files rev comment)
   "Commit changes in FILES into the TFS version-control system."
-  (let ((status (apply 'vc-tfs-command nil 1 files "checkin"
-		       (nconc (list "/comment" comment)
+  (let ((status (apply 'vc-tfs-command nil 1 files "checkin" ;FIXME Wrong style paths
+		       (nconc (list "/comment:\"" comment "\"")
 			      (vc-switches 'TFS 'checkin)))))
     (set-buffer "*vc*")
     (goto-char (point-min))
@@ -245,6 +229,14 @@ If REV is the empty string, fetch the revision of the workspace."
   "Removes pending changes from the workspace for FILE."
   (unless contents-done
     (vc-tfs-command nil 0 file "undo")))
+
+(defun vc-tfs-pull (_prompt)
+  (let* ((root default-directory)
+	 (buffer (format "*vc-tfs : %s*" (expand-file-name root))))
+    (apply 'vc-tfs-command buffer 'async root "get"
+	   (append (list "/version:T")
+		   (list "/recursive")
+		   (list "/noprompt")))))
 
 ;;;
 ;;; History functions
@@ -311,14 +303,18 @@ If LIMIT is non-nil, show no more than this many entries."
   (require 'add-log)
   (let ((brief-log-format
 	 (and (not (eq vc-log-view-type 'long))
-	      (vc-tfs-guess-brief-log-format))))
+	      (vc-tfs-guess-brief-log-format)))) ; FIXME Won't work
+						 ; when setting
+						 ; content
+						 ; asynchronously
     (set (make-local-variable 'log-view-file-re) "\\`a\\`")
     (set (make-local-variable 'log-view-per-file-logs) nil)
     (set (make-local-variable 'log-view-message-re)
 	 (if brief-log-format
 	     (car brief-log-format)
 	   "^Changeset: \\([0-9]+\\)"))
-    (when (eq vc-log-view-type 'short)
+    (when (or (eq vc-log-view-type 'short)
+	      (eq vc-log-view-type 'log-incoming))
       (setq truncate-lines t)
       (set (make-local-variable 'log-view-expanded-log-entry-function)
 	   'vc-tfs-expanded-log-entry))
@@ -345,7 +341,7 @@ If LIMIT is non-nil, show no more than this many entries."
   (let* ((file (if (listp files)
 		   (if (eq (length files) 1)
 		       (car files)
-		     (error "Fileset log is not supported"))
+		     (error "Fileset diffs are not supported"))
 		 files))		;TODO Could iterate through files
 	 (switches
 	  (append
@@ -364,6 +360,22 @@ If LIMIT is non-nil, show no more than this many entries."
 			   oldvers))
 	       (concat "/version:W" (when newvers "~C" newvers)))))))
   1)
+
+(defun vc-tfs-revision-table (files)
+  (let (process-file-side-effects
+	table)
+    (dolist (file files)
+      (with-temp-buffer
+	(vc-tfs-command t nil file "history")
+	(goto-char (point-min))
+	(while (re-search-forward "^\\([0-9]+\\) " nil t)
+	  (push (match-string 1) table))))
+    table))
+
+(defun vc-tfs-revision-completion-table (files)
+  (letrec ((table (lazy-completion-table
+		   table (lambda () (vc-tfs-revision-table files)))))
+    table))
 
 ;;;
 ;;; Directory functions
@@ -392,7 +404,6 @@ If LIMIT is non-nil, show no more than this many entries."
 
 (defun vc-tfs-dir-status (dir callback)
   "Return a list build from status of files in DIR."
-  (cd dir)
   (vc-tfs-command (current-buffer) 'async dir "status" "/recursive")
   (vc-run-delayed
     (vc-tfs-after-dir-status callback)))
@@ -441,6 +452,40 @@ If LIMIT is non-nil, show no more than this many entries."
        (propertize "No shelve"
 		   'help-echo shelve-help-echo
 		   'face 'font-lock-variable-name-face)))))
+
+;;;
+;;; Miscellaneous
+;;;
+
+(defun vc-tfs-root (file)
+  "Return the root of the hierarchy for FILE."
+  (with-temp-buffer
+    (let ((dir
+	   (if (file-directory-p file)
+	       file
+	     (file-name-directory file))))
+      (cd dir)
+      (vc-tfs-command t 0 nil "workfold")
+      (goto-char (point-min))
+      (when (re-search-forward " \\$.+: \\(.*\\)")
+	(match-string 1)))))
+
+(defun vc-tfs-previous-revision (_file rev)
+  (let ((newrev (1- (string-to-number rev))))
+    (when (< 0 newrev)
+      (number-to-string newrev))))
+
+(defun vc-tfs-next-revision (file rev)
+  (let ((newrev (1+ (string-to-number rev))))
+    (unless (< (string-to-number (vc-tfs-working-revision file))
+	       newrev)
+      (number-to-string newrev))))
+
+(defun vc-tfs-delete-file (file)
+  (vc-tfs-command nil 0 file "delete"))
+
+(defun vc-tfs-rename-file (old new)
+  (vc-tfs-command nil 0 new "rename" (file-relative-name old)))
 
 ;;;
 ;;; Shelve functions
