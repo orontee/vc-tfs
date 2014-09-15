@@ -84,7 +84,13 @@ of arguments, use t."
 		 (repeat :tag "Argument List" :value ("") string))
   :version "24.4"
   :group 'vc-tfs)
- 
+
+(defcustom vc-tfs-coding-system-for-logs 'cp850-dos
+  "The coding system used to decode logs content."
+  :type '(coding-system :tag "Coding system")
+  :version "24.4"
+  :group 'vc-tfs)
+
 ;;; Properties of the backend
 
 (defun vc-tfs-revision-granularity () 'repository)
@@ -251,7 +257,8 @@ SHORTLOG and START-REVISION are ignored.
 If LIMIT is non-nil, show no more than this many entries."
   (save-current-buffer
     (vc-setup-buffer buffer)
-    (let ((inhibit-read-only t)
+    (let ((coding-system-for-read vc-tfs-coding-system-for-logs)
+	  (inhibit-read-only t)
 	  (file (if (listp files)
 		    (if (eq (length files) 1)
 			(car files)
