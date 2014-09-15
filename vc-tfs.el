@@ -188,11 +188,12 @@ The REV and COMMENT arguments are ignored."
 ;; TODO We'd better check if file is a descendant of a workspace
 ;; root
 
-(defun vc-tfs-checkin (files rev comment)
+(defun vc-tfs-checkin (files _rev comment)
   "Commit changes in FILES into the TFS version-control system."
-  (let ((status (apply 'vc-tfs-command nil 1 files "checkin" ;FIXME Wrong style paths
-		       (nconc (list "/comment:\"" comment "\"")
-			      (vc-switches 'TFS 'checkin)))))
+  (let* ((files (mapcar 'convert-standard-filename files))
+	 (args (nconc (list "/comment:\"" comment "\"")
+		      (vc-switches 'TFS 'checkin)))
+	 (status (apply 'vc-tfs-command nil 1 files "checkin" args)))
     (set-buffer "*vc*")
     (goto-char (point-min))
     (unless (equal status 0)
