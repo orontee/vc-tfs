@@ -1,26 +1,42 @@
-;;; vc-tfs.el --- support Team Foundation Server for version-control  -*- lexical-binding:t -*-
+;;; vc-tfs.el --- support TFS for version control system  -*- lexical-binding:t -*-
+
+;; Copyright (C) 2014 Matthias Meulien
 
 ;; Author: Matthias Meulien <orontee@gmail.com>
+;; Keywords: vc tools 
 ;; Package: vc
+;; URL: https://gitorious.org/vc-tfs-el
+;; Version: 0.1
 
-;; Note that most of this implementation was taken from vc-svn.el and
-;; vc-git.el.
+;;; Commentary:
 
-;; Todos:
-;; - Rollback
-;; - Branches creation/deletion
-;; - Labels creation/deletion
-;; - Change comment modification (`vc-tfs-modify-change-comment')
+;; This file contains a VC backend for the TFS version control system.
 
+;; Most of the implementation is taken from vc-svn.el and vc-git.el.
+;; Note that this package is rather young and has not been tested a
+;; lot, I recommend you set `vc-command-message' to non-nil before
+;; use.
+
+;;; Todo:
+
+;; - Add support for rollback
+;; - Add support for branches creation/deletion
+;; - Add support for labels creation/deletion
+;; - Implement change comment modification (`vc-tfs-modify-change-comment')
+;; - Add workspace name to `vc-tfs-dir-extra-headers'
+;; - Implement `vc-tfs-annotate' and friends
+;;
 ;; Many todos are embedded in the source code.
 
-;; Bugs:
-;; - wrong default-directory when running `vc-print-root-log'
-;; - cursor always at the end of the long log buffer
-;; - Characters encoding in log buffers (bind locally `coding-system-for-read')
-;; - Output parsing is dependant on language (bind locally `process-environment')
+;;; Bugs:
 
-;; Known limitations/Questions:
+;; - Wrong default-directory when running `vc-print-root-log'
+;; - Cursor always at the end of long log buffers
+;; - Output parsing is dependant on language (bind locally `process-environment')
+;; - There are missing calls to `vc-set-async-update' to keep views up-to-date
+
+;;; Known limitations/Questions:
+
 ;; - `diff-hunk-file-names' does not found the file names in TFS diff hunks
 ;; - Fileset logs and diffs are currently not supported
 ;; - Should we use the "*vc*" buffer in place of temporary buffers?
@@ -51,7 +67,9 @@
   :group 'vc-tfs)
 
 (defcustom vc-tfs-global-switches nil
-  "Global switches to pass to any TFS command."
+  "Global switches to pass to any TFS command.
+You may for example specify an argument to authenticate the TFS
+user (eg. \"/login:user,password\")."
   :type '(choice (const :tag "None" nil)
 		 (string :tag "Argument String")
 		 (repeat :tag "Argument List"
@@ -180,13 +198,13 @@ of arguments, use t."
 ;;; State-changing functions
 ;;;
 
-(defun vc-tfs-create-repo (backend)
+(defun vc-tfs-create-repo (_backend)
   "Create a workspace and a workspace mapping."
   ;; (vc-tfs-command "*vc*" 0 name "workspace" '("/new" "/noprompt" "/collection:"))
   ;; (vc-tfs-command "*vc*" 0 nil "workfold" '("/map $/ ." ))
   (error "Not yet implemented"))
 
-(defun vc-tfs-register (files &optional rev comment)
+(defun vc-tfs-register (files &optional _rev _comment)
   "Register FILES into the TFS version-control system.  
 The REV and COMMENT arguments are ignored."
   (apply 'vc-tfs-command nil 0 files "add" (vc-switches 'TFS 'register)))
@@ -222,7 +240,7 @@ If REV is the empty string, fetch the revision of the workspace."
 		 "/version:W"))
 	    (list "/noprompt")))))
 
-(defun vc-tfs-checkout (file &optional editable rev)
+(defun vc-tfs-checkout (file &optional _editable rev)
   ;; TODO Don't recreate file if it already exists with required
   ;; version
   (apply 'vc-tfs-command nil 0 file "get"
@@ -275,7 +293,7 @@ If LIMIT is non-nil, show no more than this many entries."
 	      (when limit (list (format "/stopafter:%s" limit)))
 	      (list "/noprompt"))))))
 
-(defun vc-tfs-log-incoming (buffer remote-location)
+(defun vc-tfs-log-incoming (buffer _remote-location)
   (apply 'vc-tfs-command buffer 0 default-directory "history"
 	 (append (list "/version:W~T")
 		 (list "/recursive")
@@ -439,7 +457,7 @@ If LIMIT is non-nil, show no more than this many entries."
 		  :help "View the contents of the current shelve"))
     map))
 
-(defun vc-tfs-dir-extra-headers (dir)
+(defun vc-tfs-dir-extra-headers (_dir)
   (let ((shelveset (vc-tfs-shelve-list))
 	(shelve-help-echo "Use M-x vc-tfs-shelve to create a shelve."))
     (if shelveset
