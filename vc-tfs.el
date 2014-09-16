@@ -6,7 +6,7 @@
 ;; Keywords: vc tools
 ;; Package: vc
 ;; URL: https://gitorious.org/vc-tfs-el
-;; Version: 0.1
+;; Version: 0.1.1
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -334,10 +334,9 @@ than this many entries."
 Searching the buffer to guess the format does not work because
 its content can be set asynchronously."
   (let ((type
-	 (if (or (eq vc-log-view-type 'short)
-		 (eq vc-log-view-type 'log-incoming))
+	 (if (eq vc-log-view-type 'short)
 	     'default
-	   'recursive)))
+	   'recursive)))		; incoming type has the recursive arg
     (cons
      (plist-get vc-tfs-brief-log-formats type)
      '((1 'log-view-message-face)
