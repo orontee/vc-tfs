@@ -29,6 +29,9 @@
 ;; Note that this package is rather young and has not been tested a
 ;; lot, I recommend you set `vc-command-message' to non-nil before
 ;; use.
+;;
+;; If checkin messages are encoded, you must customize the variable
+;; `vc-tfs-coding-system-for-logs' to the corresponding coding system.
 
 ;; Todo:
 ;;
@@ -45,7 +48,6 @@
 ;;
 ;; - Wrong default-directory when running `vc-print-root-log'
 ;; - Cursor always at the end of long log buffers
-;; - Output parsing is dependant on language (bind locally `process-environment')
 ;; - There are missing calls to `vc-set-async-update' to keep views up-to-date
 
 ;; Known limitations/Questions:
@@ -116,7 +118,7 @@ of arguments, use t."
   :version "24.4"
   :group 'vc-tfs)
 
-(defcustom vc-tfs-coding-system-for-logs 'cp850-dos
+(defcustom vc-tfs-coding-system-for-logs 'cp1252
   "The coding system used to decode logs content."
   :type '(coding-system :tag "Coding system")
   :version "24.4"
@@ -309,10 +311,11 @@ than this many entries."
 
 (defun vc-tfs-log-incoming (buffer _remote-location)
   "Insert in BUFFER the revision log for the changes received by a pull."
-  (apply 'vc-tfs-command buffer 0 default-directory "history"
-	 (append (list "/version:W~T")
-		 (list "/recursive")
-		 (list "/noprompt"))))
+  (let ((coding-system-for-read vc-tfs-coding-system-for-logs))
+    (apply 'vc-tfs-command buffer 0 default-directory "history"
+	   (append (list "/version:W~T")
+		   (list "/recursive")
+		   (list "/noprompt")))))
 
 (defvar log-view-message-re)
 (defvar log-view-file-re)
