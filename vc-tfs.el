@@ -373,13 +373,14 @@ its content can be set asynchronously."
 (defun vc-tfs-expanded-log-entry (revision)
   "Return expanded log entry for REVISION."
   (with-temp-buffer
-    (apply 'vc-tfs-command t nil nil "changeset"
-	   (append (list revision)
-		   (list "/noprompt")))
-    (goto-char (point-min))
-    (unless (eobp)
-      (indent-region (point-min) (point-max) 2)
-      (buffer-string))))
+    (let ((coding-system-for-read vc-tfs-coding-system-for-logs))
+      (apply 'vc-tfs-command t nil nil "changeset"
+	     (append (list revision)
+		     (list "/noprompt")))
+      (goto-char (point-min))
+      (unless (eobp)
+	(indent-region (point-min) (point-max) 2)
+	(buffer-string)))))
 
 (defun vc-tfs-diff (files &optional oldvers newvers buffer)
   "Insert in BUFFER a difference report between OLDVERS and NEWVERS of FILES.
