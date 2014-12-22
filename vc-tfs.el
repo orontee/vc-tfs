@@ -139,14 +139,16 @@ of arguments, use t."
 
 (defun vc-tfs-registered (file)
   "Check whether FILE is registered with TFS."
-  (with-temp-buffer
-    (cd (file-name-directory file))
-    (let* (process-file-side-effects
-	   (status
-	    (condition-case nil
-		(vc-tfs-command t t file "localversions") ; FIXME Fails with added files
-	      (error nil))))
-      (eq 0 status))))
+    (with-temp-buffer
+      (cd (file-name-directory file))
+      (let* (process-file-side-effects
+	     (status
+	      (condition-case nil
+		  (vc-tfs-command t 0 file "properties")
+		(error nil))))
+	(eq 0 status))))
+
+;; REMARK Note that localversions miss folders and added files 
 
 (defun vc-tfs-state (file)
   "TFS-specific function to compute FILE version control state."
