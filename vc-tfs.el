@@ -5,7 +5,7 @@
 ;; Author: Matthias Meulien <orontee@gmail.com>
 ;; Keywords: vc tools
 ;; Package: vc
-;; URL: https://gitorious.org/vc-tfs-el
+;; URL: https://github.com/orontee/vc-tfs
 ;; Version: 0.1.3
 
 ;; This program is free software; you can redistribute it and/or modify
